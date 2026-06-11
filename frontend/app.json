@@ -14,7 +14,8 @@
         "NSContactsUsageDescription": "Find friends already using ConnectX from your contacts",
         "NSCameraUsageDescription": "Take photos and videos for chats and profile",
         "NSMicrophoneUsageDescription": "Record voice messages and make voice calls",
-        "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats"
+        "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats",
+        "NSLocationWhenInUseUsageDescription": "Share your location with friends in chats"
       }
     },
     "android": {
@@ -28,7 +29,9 @@
         "CAMERA",
         "RECORD_AUDIO",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
       ]
     },
     "web": {
