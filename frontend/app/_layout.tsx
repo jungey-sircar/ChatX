@@ -1,13 +1,19 @@
 import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useColorScheme } from 'react-native';
+import { useColorScheme, View, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { useFonts } from 'expo-font';
+import { Ionicons } from '@expo/vector-icons';
+import * as SplashScreen from 'expo-splash-screen';
 import { useAuthStore } from '../src/store/authStore';
 import { useCallStore } from '../src/store/callStore';
 import { socketService } from '../src/services/socket';
 import { webRTCService } from '../src/services/webrtc';
 import { IncomingCallOverlay } from '../src/components/IncomingCallOverlay';
+
+// Keep splash visible until fonts are ready
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 function AppInitializer() {
   const { user, token, isAuthenticated } = useAuthStore();
@@ -59,9 +65,28 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
   const loadUser = useAuthStore((state) => state.loadUser);
 
+  // Preload Ionicons font to avoid "Font file is empty" issues on Expo Go
+  const [fontsLoaded, fontsError] = useFonts({
+    ...Ionicons.font,
+  });
+
   useEffect(() => {
     loadUser();
   }, []);
+
+  useEffect(() => {
+    if (fontsLoaded || fontsError) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded, fontsError]);
+
+  if (!fontsLoaded && !fontsError) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
+        <ActivityIndicator size="large" color="#fff" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaProvider>

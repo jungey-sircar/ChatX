@@ -10,7 +10,7 @@ import requests
 
 # Test Configuration
 WS_BASE = "wss://webrtc-preview.preview.emergentagent.com/api/ws"
-API_BASE = "https://webrtc-preview.preview.emergentagent.com/api"
+API_BASE = "https://expo-troubleshoot-4.preview.emergentagent.com/api"
 
 async def debug_websocket_chat():
     """Debug WebSocket chat functionality"""

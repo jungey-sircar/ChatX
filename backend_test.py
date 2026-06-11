@@ -11,7 +11,7 @@ import websocket
 from typing import Dict, Optional
 
 # Configuration
-BASE_URL = "https://webrtc-preview.preview.emergentagent.com/api"
+BASE_URL = "https://expo-troubleshoot-4.preview.emergentagent.com/api"
 WS_URL = "wss://webrtc-preview.preview.emergentagent.com/api/ws"
 
 # Test credentials

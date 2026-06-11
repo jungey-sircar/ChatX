@@ -114,8 +114,12 @@ class SocketService {
       }
     };
 
-    this.socket.onerror = (error) => {
-      console.error('[Socket] Error:', error);
+    this.socket.onerror = (error: any) => {
+      // Use warn instead of error to avoid red-box overlay in Expo Go.
+      // WebSocket errors are expected (e.g., network issues) and the
+      // reconnect logic in onclose handles them.
+      const msg = error?.message || error?.type || 'connection error';
+      console.warn('[Socket] Error:', msg);
       this.isConnecting = false;
     };
   }

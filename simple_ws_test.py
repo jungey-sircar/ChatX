@@ -22,7 +22,7 @@ async def test_chat_message():
     import requests
     
     # Login user1
-    response1 = requests.post("https://webrtc-preview.preview.emergentagent.com/api/auth/login", 
+    response1 = requests.post("https://expo-troubleshoot-4.preview.emergentagent.com/api/auth/login", 
                              json={"username": "testuser1", "password": "password123"})
     if response1.status_code != 200:
         print(f"❌ User1 login failed: {response1.status_code}")
@@ -31,7 +31,7 @@ async def test_chat_message():
     user1_token = response1.json()['access_token']
     
     # Login user2  
-    response2 = requests.post("https://webrtc-preview.preview.emergentagent.com/api/auth/login",
+    response2 = requests.post("https://expo-troubleshoot-4.preview.emergentagent.com/api/auth/login",
                              json={"username": "testuser2", "password": "password123"})
     if response2.status_code != 200:
         print(f"❌ User2 login failed: {response2.status_code}")
