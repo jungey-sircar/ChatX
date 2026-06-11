@@ -111,6 +111,8 @@ export default function ChatsScreen() {
              item.last_message.message_type === 'voice' ? '🎤 Voice message' :
              item.last_message.message_type === 'gift_packet' ? '🧧 Gift Packet' :
              item.last_message.message_type === 'video' ? '🎥 Video' :
+             item.last_message.message_type === 'document' ? '📄 Document' :
+             item.last_message.message_type === 'money_transfer' ? '💸 Money sent' :
              item.last_message.content}
           </Text>
           {item.unread_count > 0 && (

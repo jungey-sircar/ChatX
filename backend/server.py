@@ -731,6 +731,89 @@ async def get_transactions(current_user: dict = Depends(get_current_user)):
     }).sort("created_at", -1).to_list(100)
     return [TransactionResponse(**t) for t in transactions]
 
+
+class ChatTransferRequest(BaseModel):
+    receiver_id: str
+    amount: float
+    note: Optional[str] = ""
+
+
+@api_router.post("/messages/send-money")
+async def send_money_in_chat(req: ChatTransferRequest, current_user: dict = Depends(get_current_user)):
+    """Transfer money via wallet AND post a 'money_transfer' message in chat."""
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    # Ensure sender has wallet
+    sender_wallet = await db.wallets.find_one({"user_id": current_user["id"]})
+    if not sender_wallet or sender_wallet["balance"] < req.amount:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    receiver = await db.users.find_one({"id": req.receiver_id})
+    if not receiver:
+        raise HTTPException(status_code=404, detail="Receiver not found")
+
+    # Ensure receiver wallet
+    receiver_wallet = await db.wallets.find_one({"user_id": req.receiver_id})
+    if not receiver_wallet:
+        receiver_wallet = {
+            "id": str(uuid.uuid4()),
+            "user_id": req.receiver_id,
+            "balance": 0.0,
+            "created_at": datetime.utcnow(),
+        }
+        await db.wallets.insert_one(receiver_wallet)
+
+    # Update balances
+    await db.wallets.update_one({"user_id": current_user["id"]}, {"$inc": {"balance": -req.amount}})
+    await db.wallets.update_one({"user_id": req.receiver_id}, {"$inc": {"balance": req.amount}})
+
+    # Transaction record
+    tx_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    tx = {
+        "id": tx_id,
+        "sender_id": current_user["id"],
+        "receiver_id": req.receiver_id,
+        "amount": req.amount,
+        "note": req.note or "",
+        "status": "completed",
+        "created_at": now,
+    }
+    await db.transactions.insert_one(tx)
+
+    # Chat message
+    msg_id = str(uuid.uuid4())
+    content = json.dumps({
+        "transaction_id": tx_id,
+        "amount": req.amount,
+        "note": req.note or "",
+        "sender_name": current_user.get("display_name") or current_user.get("username", ""),
+    })
+    msg = {
+        "id": msg_id,
+        "sender_id": current_user["id"],
+        "receiver_id": req.receiver_id,
+        "group_id": None,
+        "content": content,
+        "message_type": "money_transfer",
+        "created_at": now,
+        "read": False,
+        "translated_content": None,
+    }
+    await db.messages.insert_one(msg)
+
+    # Push via WebSocket
+    try:
+        msg_ws = dict(msg)
+        msg_ws["created_at"] = now.isoformat()
+        await manager.send_personal_message({"type": "new_message", "data": msg_ws}, req.receiver_id)
+        await manager.send_personal_message({"type": "message_sent", "data": msg_ws}, current_user["id"])
+    except Exception as e:
+        logging.warning(f"Failed to push WS for money msg {msg_id}: {e}")
+
+    return {"transaction": TransactionResponse(**tx).dict(), "message": MessageResponse(**msg).dict()}
+
 # ============== GIFT PACKET ROUTES ==============
 
 async def _ensure_wallet(user_id: str) -> dict:
