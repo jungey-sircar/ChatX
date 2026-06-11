@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useColorScheme, View, ActivityIndicator } from 'react-native';
+import { useColorScheme, View, ActivityIndicator, LogBox } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFonts } from 'expo-font';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,15 @@ import { useCallStore } from '../src/store/callStore';
 import { socketService } from '../src/services/socket';
 import { webRTCService } from '../src/services/webrtc';
 import { IncomingCallOverlay } from '../src/components/IncomingCallOverlay';
+
+// Suppress noisy dev warnings that aren't actionable in Expo Go cloud preview
+LogBox.ignoreLogs([
+  'Font file for ionicons is empty',
+  'ExpoFontLoader.loadAsync',
+  '"shadow*" style props are deprecated',
+  '"textShadow*" style props are deprecated',
+  'Non-serializable values were found in the navigation state',
+]);
 
 // Keep splash visible until fonts are ready
 SplashScreen.preventAutoHideAsync().catch(() => {});

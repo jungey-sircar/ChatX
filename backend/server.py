@@ -459,6 +459,7 @@ async def add_contact_by_phone(phone_number: str, current_user: dict = Depends(g
 @api_router.post("/messages", response_model=MessageResponse)
 async def send_message(message: MessageCreate, current_user: dict = Depends(get_current_user)):
     msg_id = str(uuid.uuid4())
+    now = datetime.utcnow()
     msg = {
         "id": msg_id,
         "sender_id": current_user["id"],
@@ -466,12 +467,36 @@ async def send_message(message: MessageCreate, current_user: dict = Depends(get_
         "group_id": message.group_id,
         "content": message.content,
         "message_type": message.message_type,
-        "created_at": datetime.utcnow(),
+        "created_at": now,
         "read": False,
         "translated_content": None
     }
     await db.messages.insert_one(msg)
-    
+
+    # Also push via WebSocket so the receiver gets the message in real-time
+    try:
+        msg_ws = dict(msg)
+        msg_ws["created_at"] = now.isoformat()
+        if message.group_id:
+            group = await db.groups.find_one({"id": message.group_id})
+            if group:
+                await manager.broadcast_to_users(
+                    {"type": "new_message", "data": msg_ws},
+                    [m for m in group["member_ids"] if m != current_user["id"]]
+                )
+        elif message.receiver_id:
+            await manager.send_personal_message(
+                {"type": "new_message", "data": msg_ws},
+                message.receiver_id
+            )
+        # Confirm to sender (their other devices, if any)
+        await manager.send_personal_message(
+            {"type": "message_sent", "data": msg_ws},
+            current_user["id"]
+        )
+    except Exception as e:
+        logging.warning(f"Failed to push WS notification for message {msg_id}: {e}")
+
     return MessageResponse(**msg)
 
 @api_router.get("/messages/{user_id}", response_model=List[MessageResponse])

@@ -180,7 +180,7 @@ class SocketService {
 
   // Chat-specific helpers
   sendMessage(receiverId: string, content: string, messageType: string = 'text', groupId?: string) {
-    this.send({
+    const ok = this.send({
       type: 'message',
       data: {
         receiver_id: receiverId,
@@ -189,6 +189,27 @@ class SocketService {
         group_id: groupId,
       },
     });
+
+    // If socket is down, fall back to REST so the message still gets stored
+    // and pushed to the receiver via the backend's WebSocket broadcast.
+    if (!ok) {
+      console.log('[Socket] Falling back to REST for sendMessage');
+      // Lazy-import to avoid circular dep
+      import('./api')
+        .then(({ default: api }) => {
+          const body: Record<string, any> = {
+            content,
+            message_type: messageType,
+          };
+          if (groupId) body.group_id = groupId;
+          else body.receiver_id = receiverId;
+          return api.post('/messages', body);
+        })
+        .catch((err) => {
+          console.warn('[Socket] REST fallback failed:', err?.message || err);
+        });
+    }
+    return ok;
   }
 
   sendTyping(receiverId: string) {
