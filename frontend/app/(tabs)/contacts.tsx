@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,18 +11,28 @@ import {
   SectionList,
   Platform,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Contacts from 'expo-contacts';
 import { useTheme } from '../../src/hooks/useTheme';
 import { Avatar } from '../../src/components/Avatar';
 import api from '../../src/services/api';
 import { User } from '../../src/types';
 
+type MatchedPhoneContact = {
+  phone_number: string;
+  is_registered: boolean;
+  user: User | null;
+  deviceName?: string;
+};
+
 export default function ContactsScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const searchInputRef = useRef<TextInput>(null);
   const [appContacts, setAppContacts] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -30,13 +40,16 @@ export default function ContactsScreen() {
   const [searchResults, setSearchResults] = useState<User[]>([]);
   const [searching, setSearching] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [syncingDevice, setSyncingDevice] = useState(false);
+  const [deviceMatches, setDeviceMatches] = useState<MatchedPhoneContact[]>([]);
+  const [hasSyncedOnce, setHasSyncedOnce] = useState(false);
 
   const loadAppContacts = async () => {
     try {
       const response = await api.get('/contacts');
       setAppContacts(response.data);
     } catch (error) {
-      console.error('Error loading app contacts:', error);
+      console.warn('Error loading app contacts:', error);
     }
   };
 
@@ -67,12 +80,11 @@ export default function ContactsScreen() {
     setSearching(true);
     try {
       const response = await api.get(`/users/search?query=${encodeURIComponent(query)}`);
-      // Filter out users already in contacts
       const contactIds = new Set(appContacts.map(c => c.id));
       const filtered = response.data.filter((u: User) => !contactIds.has(u.id));
       setSearchResults(filtered);
     } catch (error) {
-      console.error('Error searching users:', error);
+      console.warn('Error searching users:', error);
     } finally {
       setSearching(false);
     }
@@ -95,6 +107,8 @@ export default function ContactsScreen() {
       await api.post('/contacts/add', { user_id: userId });
       await loadAppContacts();
       setSearchResults(prev => prev.filter(u => u.id !== userId));
+      // Also update device matches
+      setDeviceMatches(prev => prev.filter(m => m.user?.id !== userId));
       Alert.alert('Contact Added', 'You can now chat with this person!');
     } catch (error: any) {
       const msg = error.response?.data?.detail;
@@ -114,6 +128,115 @@ export default function ContactsScreen() {
       // May already be a contact
     }
     router.push(`/chat/${userId}`);
+  };
+
+  // ============== DEVICE CONTACTS SYNC ==============
+  const focusSearchBar = () => {
+    searchInputRef.current?.focus();
+  };
+
+  const syncDeviceContacts = async () => {
+    if (Platform.OS === 'web') {
+      Alert.alert(
+        'Not Available on Web',
+        'Phone contact sync is only available on the mobile app. Please use the search bar above to find friends.'
+      );
+      return;
+    }
+
+    setSyncingDevice(true);
+    try {
+      // 1. Request permission
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        setSyncingDevice(false);
+        Alert.alert(
+          'Permission Needed',
+          'ConnectX needs permission to access your phone contacts so we can find which of your friends already use ConnectX.\n\nPlease enable Contacts permission in Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]
+        );
+        return;
+      }
+
+      // 2. Read contacts with phone numbers
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+
+      if (!data || data.length === 0) {
+        setSyncingDevice(false);
+        Alert.alert('No Contacts', 'No contacts found on your device.');
+        return;
+      }
+
+      // 3. Build a list of phone numbers (deduped) and a phone->name map
+      const phoneToName = new Map<string, string>();
+      const phoneNumbers: string[] = [];
+      for (const c of data) {
+        if (!c.phoneNumbers || c.phoneNumbers.length === 0) continue;
+        const name = c.name || c.firstName || 'Unknown';
+        for (const p of c.phoneNumbers) {
+          const num = (p.number || '').replace(/\s|-|\(|\)/g, '');
+          if (num && !phoneToName.has(num)) {
+            phoneToName.set(num, name);
+            phoneNumbers.push(num);
+          }
+        }
+      }
+
+      if (phoneNumbers.length === 0) {
+        setSyncingDevice(false);
+        Alert.alert('No Phone Numbers', 'None of your contacts have phone numbers attached.');
+        return;
+      }
+
+      // 4. Send to backend in chunks of 200
+      const allMatches: MatchedPhoneContact[] = [];
+      const CHUNK = 200;
+      for (let i = 0; i < phoneNumbers.length; i += CHUNK) {
+        const chunk = phoneNumbers.slice(i, i + CHUNK);
+        try {
+          const resp = await api.post('/contacts/match-phones', { phone_numbers: chunk });
+          for (const m of resp.data || []) {
+            allMatches.push({
+              ...m,
+              deviceName: phoneToName.get(m.phone_number) || phoneToName.get(m.phone_number.replace(/\D/g, '')),
+            });
+          }
+        } catch (err) {
+          console.warn('match-phones chunk failed:', err);
+        }
+      }
+
+      // 5. Filter: only registered users that are NOT already in our contacts
+      const myContactIds = new Set(appContacts.map(c => c.id));
+      const registeredMatches = allMatches.filter(
+        m => m.is_registered && m.user && !myContactIds.has(m.user.id)
+      );
+
+      setDeviceMatches(registeredMatches);
+      setHasSyncedOnce(true);
+      setSyncingDevice(false);
+
+      if (registeredMatches.length === 0) {
+        Alert.alert(
+          'Sync Complete',
+          `Checked ${phoneNumbers.length} contacts. None of your phone contacts are on ConnectX yet (or they are already in your contacts list).\n\nInvite them or search by username!`
+        );
+      } else {
+        Alert.alert(
+          'Friends Found!',
+          `Found ${registeredMatches.length} friend${registeredMatches.length === 1 ? '' : 's'} from your phone contacts on ConnectX.`
+        );
+      }
+    } catch (error: any) {
+      console.warn('Sync error:', error);
+      setSyncingDevice(false);
+      Alert.alert('Error', 'Failed to sync contacts. Please try again.');
+    }
   };
 
   // Filter contacts based on search
@@ -138,7 +261,6 @@ export default function ContactsScreen() {
         type: 'contact',
       });
     } else if (filteredContacts.length > 0 && searchQuery.length >= 2) {
-      // Show matching contacts even when search focused
       const matching = filteredContacts.filter(c => {
         const q = searchQuery.toLowerCase();
         return (c.display_name || '').toLowerCase().includes(q) ||
@@ -151,6 +273,15 @@ export default function ContactsScreen() {
           type: 'contact',
         });
       }
+    }
+
+    // Friends from phone contacts (synced)
+    if (deviceMatches.length > 0 && !searchQuery) {
+      sections.push({
+        title: `From Your Phone Contacts (${deviceMatches.length})`,
+        data: deviceMatches,
+        type: 'device_match',
+      });
     }
 
     // Search results from platform
@@ -235,10 +366,39 @@ export default function ContactsScreen() {
     </TouchableOpacity>
   );
 
-  const renderItem = ({ item, section }: { item: User; section: any }) => {
-    if (section.type === 'search_result') {
-      return renderSearchResultItem(item);
-    }
+  const renderDeviceMatchItem = (item: MatchedPhoneContact) => {
+    const u = item.user!;
+    return (
+      <TouchableOpacity
+        style={[styles.contactItem, { backgroundColor: theme.surface }]}
+        onPress={() => addAndChat(u.id)}
+        activeOpacity={0.7}
+      >
+        <Avatar source={u.profile_photo} name={u.display_name || u.username} size={50} />
+        <View style={styles.contactContent}>
+          <Text style={[styles.contactName, { color: theme.text }]} numberOfLines={1}>
+            {u.display_name || u.username}
+          </Text>
+          <Text style={[styles.contactSub, { color: theme.textSecondary }]} numberOfLines={1}>
+            {item.deviceName ? `Saved as "${item.deviceName}"` : `@${u.username}`}
+          </Text>
+        </View>
+        <View style={styles.contactActions}>
+          <TouchableOpacity
+            style={[styles.addBtn, { backgroundColor: theme.primary }]}
+            onPress={() => addContact(u.id)}
+          >
+            <Ionicons name="person-add" size={16} color="#FFF" />
+            <Text style={styles.addBtnText}>Add</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderItem = ({ item, section }: { item: any; section: any }) => {
+    if (section.type === 'search_result') return renderSearchResultItem(item);
+    if (section.type === 'device_match') return renderDeviceMatchItem(item);
     return renderContactItem(item);
   };
 
@@ -256,7 +416,7 @@ export default function ContactsScreen() {
         <View style={styles.emptySearch}>
           <Ionicons name="search" size={48} color={theme.textSecondary} />
           <Text style={[styles.emptyTitle, { color: theme.textSecondary }]}>
-            No users found for "{searchQuery}"
+            No users found for &quot;{searchQuery}&quot;
           </Text>
           <Text style={[styles.emptySubtext, { color: theme.textSecondary }]}>
             Try searching by username, email, or phone number
@@ -275,27 +435,64 @@ export default function ContactsScreen() {
             Find People to Chat With
           </Text>
           <Text style={[styles.emptySubtext, { color: theme.textSecondary }]}>
-            Search for friends by their username, email, or phone number above
+            Sync your phone contacts or search for friends by username, email, or phone number.
           </Text>
+
           <View style={styles.tipContainer}>
-            <View style={[styles.tipCard, { backgroundColor: theme.surface }]}>
+            {/* Sync Phone Contacts - primary CTA */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={syncDeviceContacts}
+              disabled={syncingDevice}
+              style={[styles.ctaCard, { backgroundColor: theme.primary }]}
+            >
+              {syncingDevice ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <Ionicons name="phone-portrait" size={22} color="#FFF" />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.ctaTitle}>
+                  {syncingDevice ? 'Syncing…' : 'Sync Phone Contacts'}
+                </Text>
+                <Text style={styles.ctaSub}>
+                  Find which of your contacts already use ConnectX
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#FFF" />
+            </TouchableOpacity>
+
+            {/* Search Users - clickable tip card */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={focusSearchBar}
+              style={[styles.tipCard, { backgroundColor: theme.surface }]}
+            >
               <Ionicons name="search" size={20} color={theme.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.tipTitle, { color: theme.text }]}>Search Users</Text>
                 <Text style={[styles.tipSub, { color: theme.textSecondary }]}>
-                  Type a name, email, or phone in the search bar
+                  Tap to type a name, email or phone number
                 </Text>
               </View>
-            </View>
-            <View style={[styles.tipCard, { backgroundColor: theme.surface }]}>
+              <Ionicons name="chevron-forward" size={18} color={theme.textSecondary} />
+            </TouchableOpacity>
+
+            {/* Add & Chat - clickable tip card */}
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={focusSearchBar}
+              style={[styles.tipCard, { backgroundColor: theme.surface }]}
+            >
               <Ionicons name="person-add" size={20} color={theme.primary} />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.tipTitle, { color: theme.text }]}>Add & Chat</Text>
                 <Text style={[styles.tipSub, { color: theme.textSecondary }]}>
-                  Tap on a user to add them and start chatting instantly
+                  Tap a search result to add and chat instantly
                 </Text>
               </View>
-            </View>
+              <Ionicons name="chevron-forward" size={18} color={theme.textSecondary} />
+            </TouchableOpacity>
           </View>
         </View>
       );
@@ -324,16 +521,32 @@ export default function ContactsScreen() {
       <View style={styles.header}>
         <Text style={[styles.headerTitle, { color: theme.text }]}>Contacts</Text>
         <View style={styles.headerRight}>
+          <TouchableOpacity
+            onPress={syncDeviceContacts}
+            disabled={syncingDevice}
+            style={[styles.syncBtn, { backgroundColor: theme.primary + '20' }]}
+            activeOpacity={0.7}
+          >
+            {syncingDevice ? (
+              <ActivityIndicator size="small" color={theme.primary} />
+            ) : (
+              <Ionicons name="sync" size={18} color={theme.primary} />
+            )}
+            <Text style={[styles.syncBtnText, { color: theme.primary }]}>
+              {hasSyncedOnce ? 'Re-sync' : 'Sync'}
+            </Text>
+          </TouchableOpacity>
           <Text style={[styles.contactCount, { color: theme.textSecondary }]}>
-            {appContacts.length} contacts
+            {appContacts.length}
           </Text>
         </View>
       </View>
 
-      {/* Search bar - always visible and prominent */}
+      {/* Search bar */}
       <View style={[styles.searchContainer, { backgroundColor: theme.surface }]}>
         <Ionicons name="search" size={20} color={theme.textSecondary} />
         <TextInput
+          ref={searchInputRef}
           style={[styles.searchInput, { color: theme.text }]}
           placeholder="Search by name, email, or phone..."
           placeholderTextColor={theme.textSecondary}
@@ -367,7 +580,7 @@ export default function ContactsScreen() {
           sections={sections}
           renderItem={renderItem}
           renderSectionHeader={renderSectionHeader}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item, idx) => item.id || item.phone_number || String(idx)}
           contentContainerStyle={styles.listContent}
           stickySectionHeadersEnabled={true}
           refreshControl={
@@ -407,7 +620,19 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
+  },
+  syncBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+  },
+  syncBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   contactCount: {
     fontSize: 13,
@@ -503,8 +728,8 @@ const styles = StyleSheet.create({
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
-    paddingHorizontal: 32,
-    paddingTop: 40,
+    paddingHorizontal: 24,
+    paddingTop: 32,
   },
   emptyIcon: {
     width: 96,
@@ -524,7 +749,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 20,
-    marginBottom: 28,
+    marginBottom: 24,
   },
   emptySearch: {
     flex: 1,
@@ -535,6 +760,23 @@ const styles = StyleSheet.create({
   tipContainer: {
     width: '100%',
     gap: 12,
+  },
+  ctaCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 18,
+    borderRadius: 16,
+  },
+  ctaTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  ctaSub: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 2,
   },
   tipCard: {
     flexDirection: 'row',

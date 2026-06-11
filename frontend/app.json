@@ -9,14 +9,27 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSContactsUsageDescription": "Find friends already using ConnectX from your contacts",
+        "NSCameraUsageDescription": "Take photos and videos for chats and profile",
+        "NSMicrophoneUsageDescription": "Record voice messages and make voice calls",
+        "NSPhotoLibraryUsageDescription": "Share photos from your gallery in chats"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "READ_CONTACTS",
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "bundler": "metro",
